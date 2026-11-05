@@ -1,0 +1,10 @@
+.env
+
+# MLflow (données locales du serveur de tracking)
+mlflow.db
+mlartifacts/
+mlruns/
+
+# Python
+__pycache__/
+*.pyc

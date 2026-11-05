@@ -8,17 +8,13 @@ from sklearn.preprocessing import  StandardScaler, FunctionTransformer, OneHotEn
 from sklearn.compose import ColumnTransformer
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.pipeline import Pipeline
-
+from sklearn.metrics import accuracy_score, f1_score, recall_score, precision_score
 
 if __name__ == "__main__":
 
     ### MLFLOW Experiment setup
     experiment_name="appointment_cancellation_detector"
     mlflow.set_experiment(experiment_name)
-    experiment = mlflow.get_experiment_by_name(experiment_name)
-
-    client = mlflow.tracking.MlflowClient()
-    run = client.create_run(experiment.experiment_id)
 
     print("training model...")
     
@@ -49,8 +45,8 @@ if __name__ == "__main__":
         df = df.copy()
 
         ## Transform datetime into a number
-        df["ScheduledDay"] = pd.to_datetime(df["ScheduledDay"], yearfirst=True, infer_datetime_format=True)
-        df["AppointmentDay"] = pd.to_datetime(df["AppointmentDay"], yearfirst=True, infer_datetime_format=True)
+        df["ScheduledDay"] = pd.to_datetime(df["ScheduledDay"], format="ISO8601")
+        df["AppointmentDay"] = pd.to_datetime(df["AppointmentDay"], format="ISO8601")
 
         ## Get the difference between scheduled day and appointment
         df["time_difference_between_scheduled_and_appointment"] = (df["AppointmentDay"] - df["ScheduledDay"]).dt.days
@@ -64,10 +60,10 @@ if __name__ == "__main__":
 
     # Preprocessing 
     categorical_features = ["Gender", "Neighbourhood"] # Select all the columns containing strings
-    categorical_transformer = OneHotEncoder(drop='first', handle_unknown='error', sparse=False)
+    categorical_transformer = OneHotEncoder(drop='first', handle_unknown='ignore', sparse_output=False)
 
     numerical_feature_mask = ~X_train.columns.isin(["Gender", "Neighbourhood", "ScheduledDay","AppointmentDay"]) # Select all the columns containing anything else than strings
-    numerical_features = X_train.columns[numerical_feature_mask]
+    numerical_features = X_train.columns[numerical_feature_mask].tolist()
     numerical_transformer = StandardScaler()
 
     feature_preprocessor = ColumnTransformer(
@@ -84,20 +80,26 @@ if __name__ == "__main__":
     model = Pipeline(steps=[
         ("Dates_preprocessing", date_preprocessor),
         ('features_preprocessing', feature_preprocessor),
-        ("Regressor",RandomForestClassifier(n_estimators=n_estimators, min_samples_split=min_samples_split))
+        ("Regressor",RandomForestClassifier(n_estimators=n_estimators, min_samples_split=min_samples_split, class_weight="balanced"))
     ])
 
     # Log experiment to MLFlow
-    with mlflow.start_run(run_id = run.info.run_id) as run:
+    with mlflow.start_run():
         model.fit(X_train, y_train)
+        y_test_pred = model.predict(X_test)
+        mlflow.log_metric("test_accuracy", accuracy_score(y_test, y_test_pred))
+        mlflow.log_metric("test_f1", f1_score(y_test, y_test_pred))
+        mlflow.log_metric("test_recall", recall_score(y_test, y_test_pred))
+        mlflow.log_metric("test_precision", precision_score(y_test, y_test_pred))
         predictions = model.predict(X_train)
 
         # Log model seperately to have more flexibility on setup 
         mlflow.sklearn.log_model(
             sk_model=model,
-            artifact_path="appointment_cancellation_detector",
+            name="appointment_cancellation_detector",
             registered_model_name="appointment_cancellation_detector_RF",
-            signature=infer_signature(X_train, predictions)
+            signature=infer_signature(X_train, predictions),
+            serialization_format="cloudpickle",
         )
         
     print("...Done!")
